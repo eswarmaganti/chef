@@ -105,4 +105,171 @@
 - To edit an item named `charlie` that is contained in a data bag named `admins`, we can use the below command
     - `knife data bag edit admins charlie`
 
-TODO: Use data bags
+## Use Data Bags
+
+Data bags can be accessed in the following ways:
+
+### Search
+
+- Data bags store global variables as JSON data. Data bags are indexed for searching and can be loaded by a cookbook or
+  accessed during search.
+- Any search for data bag (or data bag item) must specify the name of the data bag and then provide the search query
+  string that will be used during the search.
+- For example, to use search within a data bag named `admin_data` across all items, except for the `admin_users` item,
+  enter the following  
+  `knife search admin_data "(NOT id:admin_users)"`
+- To include same search query in a recipe, use a code block similar to:  
+  `search(:admin_data, 'NOT id:admin_users')`
+- It may not be possible to know which data bag items will be needed. It may be necessary to load everything in a data
+  bag. Using a search query is the ideal way to deal with that ambiguity, yet still ensure that all the required data is
+  returned.
+- The following example shows how a recipe can use a series of search queries to search within a data bag named
+  `admins`  
+  `search(:admins, '*:*')`
+- Or to search the administrator named "charlie"  
+  `search(:admins, 'id:charlie)`
+- Or to search for an administrator with a group identifier of "ops"  
+  `search(:admins, 'gid:ops')`
+- Or to search administrators whose name begins with the letter `c`  
+  `search(:admins, 'id:c*')`
+- Data bag items that are returned by a search query can be used as if they were a hash. For example
+  ```
+  charlie = search(:admins, 'id:charlie').first
+  puts charlie['gid'] # prints the group id of charlie
+  puts charlie['shell'] # prints the shell 
+  ```
+- The following recipe can be used to create a user for each administrator by loading all og the items from `admins`
+  data bag, looping through each admin in the data bag, and then creating a user resource so that each of those admins
+  exists.
+  ```
+  admins = data_bag('admins')
+  
+  admins.each do |login|
+    admin = data_bag_item('admins', login)
+    home = "/home/#{login}"
+    
+    user login do
+      uid admin['uid']
+      gid admin['gid']
+      shell admin['shell']
+      home home
+      manage_home true
+    end
+  end 
+  ```
+
+- And then the same recipe, modified to load administrators using a search query
+  ```
+  admins = []
+  
+  search(:admins, '*:*').each do |admin|
+    login = admin['id']
+    
+    admins << login
+    home = "/home/#{login}"
+    
+    user login do
+      uid login['uid']
+      gid login['gid']
+      shell admin['shell']
+      home home
+      manage_home true
+    end
+  end
+  ```
+
+### Environments
+
+- Values that are stored in data bags= are global to the organizations and are available to any environment.
+- The tow main strategies that can be used to store shared environment data with in a data bag by using a top level key
+  that corresponds to the environment or by using separate items for each environment.
+- A data bag stores a top-level key for an environment might look something like this:
+
+```
+{
+  "id": "some data bag item",
+  "production":{
+    # Hash with all your data here..
+  }
+  "testing":{
+    # Hash with all your data here
+  }
+}
+```
+
+- When using a data bag in a recipe, that data can be accessed from a recipe using code similar to:
+- `data_bag_item[node.chef_environemnt]['some_other_key'']`
+- The other approach is to use separate items for each environment. Depending on the amount of data, it may fit nicely
+  with in a single item.
+- If this is the case, then creating different items for each environment may be a simple approach to providing shared
+  environment values within a data bag.
+- However, this approach is more time-consuming and may not scale to large environments or when the data must be stored
+  in many data bags.
+
+### Recipies
+
+- Data bags can be accessed by a recipe in the following way
+    - Loaded by name using the chef infra language. Use this approach when a only single known data bag is required.
+    - Accessing through the search indexes. Use this approach when more than one data bag item is required or when the
+      contents of a data bag are looped through. Search indexes will bulk-load all the data bag items, which will result
+      in a lower overhead than if each data bag item were loaded by name.
+
+#### Load with chef infra language
+
+- The chef infra language provides access to data bags ans data bag items (including encrypted data bag items) with the
+  following method.
+    - `data_bag(bag)`, where `bag` us the name if the data bag
+    - `data_bag_item(bag_name, item, secret)`, where a bag is the name of the data bag, item is the name of the data bag
+      item. If `secret` isn't specified, a Chef infra client will look for a secret at the path specified by the
+      `encrypted_data_bag_secret` setting in the client.rb file.
+- The `data_bag` method returns an array with a key for each of the data bag items that are found in the data bag
+    - To load the secret from a file
+        - `data_bag_item('bag', 'item', IO.read('secret_file))`
+    - To load a single data bag named `admins`
+        - `data_bag('admins')`
+    - The contents of the data bag with item naned `justin`
+        - `data_bag_items('admins', 'justin')`
+- If item is encrypted, `data_bag_item` will automatically decrypt it using the key specified above, or (if node is
+  specified) by the `Chef::Config[:encrypted_data_bag_secret]` method, which defaults to
+  `/etc/chef/encrypted_data_bag_secret`.
+
+#### create and edit data bags
+
+- Creating and editing the contents of a data bag or a data bag item from a recipe isn't recommended. The recommended
+  method of updating a data bag or a data bag item is to use the `knife data bag` sub command.
+- If action must be done from a recipe,
+    - *If two operations concurrently attempt to update the contents of a data bag, the last-written attempt will be the
+      operation to update the contents of the data bag. This situation can lead to data loss, so organizations should
+      take steps to ensure that only one Infra Client is making updates to a data bag at a time.*
+    - *Altering data bags from the node when using the open source chef infra server requires the node's API client to
+      be granted admin privileges; In most cases, this isn't advisable.*
+- To create data from a recipe
+
+  ```
+  users = Chef::DataBag.new
+  users.name('users')
+  users.create
+  ```
+
+- To create a data bag item from a recipe
+
+  ```
+  sam = {
+    'id': 'sam',
+    'Name': 'Sam James',
+    'shell': '/bin/bash'
+  }
+  
+  databag_item = Chef::DataBagItem.new
+  databag_item.data_bag('users')
+  databag_item.raw_data = sam
+  databag_item.save
+  ```
+
+- To edit the contents of a data bag item from a recipe
+
+  ```
+  sam = data_bag_item('users','sam')
+  sam['Name'] = 'Sam Thomas'
+  sam.save
+  ```
